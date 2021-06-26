@@ -2,6 +2,4 @@
 
 export WD=$PWD
 
-if [ ! -d "$WD/out" ]; then
-    mkdir "$WD/out"
-fi
+alias shellcheck="shellcheck -e SC1091"

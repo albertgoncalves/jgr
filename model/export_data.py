@@ -10,7 +10,30 @@ from numpy import nan
 from pandas import concat, DataFrame
 from requests import get
 
-WD = environ["WD"]
+WD = join(environ["WD"], "model")
+FILENAME = {
+    "data": join(WD, "out", "data.json"),
+    "players": join(WD, "out", "players.json"),
+}
+GAME_IDS = [
+    "2020030171",
+    "2020030172",
+    "2020030173",
+    "2020030174",
+    "2020030175",
+    "2020030176",
+    "2020030177",
+    "2020030241",
+    "2020030242",
+    "2020030243",
+    "2020030244",
+    "2020030311",
+    "2020030312",
+    "2020030313",
+    "2020030314",
+    "2020030315",
+    "2020030316",
+]
 
 
 def load(path):
@@ -285,13 +308,38 @@ def combine(shots, shifts):
     ]]
 
 
-def main():
-    game_id = "2020030314"
+def get_players_shifts(game_id):
     blob = get_cache(game_id)
     game = unpack_game(blob["game"])
     shifts = unpack_shifts(game["teams"], game["players"], blob["shifts"])
-    shifts = combine(game["shots"], shifts)
-    cohorts = shifts.groupby([
+    return (game["players"], combine(game["shots"], shifts))
+
+
+def get_all(game_ids):
+    all_players = []
+    all_shifts = []
+    for game_id in game_ids:
+        (players, shifts) = get_players_shifts(game_id)
+        all_players.append(players[["player_id", "first_name", "last_name"]])
+        all_shifts.append(shifts)
+    all_players = concat(all_players)
+    all_players.drop_duplicates("player_id", inplace=True)
+    return (all_players, concat(all_shifts))
+
+
+def export(players, shifts):
+    players["index"] = 1
+    players["index"] = players["index"].cumsum()
+    player_id_to_index = {
+        row.player_id: row.index for row in players.itertuples()
+    }
+    player_index_to_name = {
+        row.index: " ".join([row.first_name, row.last_name])
+        for row in players.itertuples()
+    }
+    with open(FILENAME["players"], "w") as file:
+        json.dump(player_index_to_name, file)
+    shifts = shifts.groupby([
         "home_team_id",
         "away_team_id",
         "home_goalie_id",
@@ -315,8 +363,55 @@ def main():
         "away_shots": "sum",
         "away_goals": "sum",
     })
-    print(shifts.to_string())
-    print(cohorts.to_string())
+    shifts = shifts.loc[
+        shifts.home_goalie_id.notnull() &
+        shifts.home_skater_id_0.notnull() &
+        shifts.home_skater_id_1.notnull() &
+        shifts.home_skater_id_2.notnull() &
+        shifts.home_skater_id_3.notnull() &
+        shifts.home_skater_id_4.notnull() &
+        shifts.home_skater_id_5.isnull() &
+        shifts.away_goalie_id.notnull() &
+        shifts.away_skater_id_0.notnull() &
+        shifts.away_skater_id_1.notnull() &
+        shifts.away_skater_id_2.notnull() &
+        shifts.away_skater_id_3.notnull() &
+        shifts.away_skater_id_4.notnull() &
+        shifts.away_skater_id_5.isnull(),
+    ]
+    for team in ["home", "away"]:
+        shifts[f"{team}_goalie"] = \
+            shifts[f"{team}_goalie_id"].map(player_id_to_index)
+        for i in range(5):
+            shifts[f"{team}_skater_{i}"] = \
+                shifts[f"{team}_skater_id_{i}"].map(player_id_to_index)
+    data = {
+        "n_obs": len(shifts),
+        "n_players": len(player_id_to_index),
+        "home_goalie": shifts.home_goalie.tolist(),
+        "home_skater_0": shifts.home_skater_0.tolist(),
+        "home_skater_1": shifts.home_skater_1.tolist(),
+        "home_skater_2": shifts.home_skater_2.tolist(),
+        "home_skater_3": shifts.home_skater_3.tolist(),
+        "home_skater_4": shifts.home_skater_4.tolist(),
+        "away_goalie": shifts.away_goalie.tolist(),
+        "away_skater_0": shifts.away_skater_0.tolist(),
+        "away_skater_1": shifts.away_skater_1.tolist(),
+        "away_skater_2": shifts.away_skater_2.tolist(),
+        "away_skater_3": shifts.away_skater_3.tolist(),
+        "away_skater_4": shifts.away_skater_4.tolist(),
+        "duration": shifts.duration.tolist(),
+        "home_shots": shifts.home_shots.tolist(),
+        "away_shots": shifts.away_shots.tolist(),
+        "home_goals": shifts.home_goals.tolist(),
+        "away_goals": shifts.away_goals.tolist(),
+    }
+    with open(FILENAME["data"], "w") as file:
+        json.dump(data, file)
+
+
+def main():
+    export(*get_all(GAME_IDS))
 
 
 if __name__ == "__main__":
